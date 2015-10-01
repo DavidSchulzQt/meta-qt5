@@ -23,8 +23,6 @@ FILESEXTRAPATHS =. "${FILE_DIRNAME}/qtbase:"
 # common for qtbase-native, qtbase-nativesdk and qtbase
 SRC_URI += "\
     file://0001-Add-linux-oe-g-platform.patch \
-    file://0002-qlibraryinfo-allow-to-set-qt.conf-from-the-outside-u.patch \
-    file://0003-Add-external-hostbindir-option.patch \
     file://0004-qt_module-Fix-pkgconfig-and-libtool-replacements.patch \
     file://0005-configure-bump-path-length-from-256-to-512-character.patch \
     file://0006-QOpenGLPaintDevice-sub-area-support.patch \
@@ -34,7 +32,9 @@ SRC_URI += "\
 # common for qtbase-native and nativesdk-qtbase
 SRC_URI += " \
     file://0008-Always-build-uic.patch \
-    file://0009-Add-external-hostbindir-option-for-native-sdk.patch \
+    file://0001-Add-win32-g-oe-mkspec-that-uses-the-OE_-environment.patch \
+    file://0001-QMake-Add-option-to-set-qt.conf-file.patch \
+    file://0002-configure-Separate-host-and-build-platform.patch \
 "
 
 # CMake's toolchain configuration of nativesdk-qtbase
@@ -88,7 +88,7 @@ OE_QMAKE_PATH_HOST_DATA = "${libdir}${QT_DIR_NAME}"
 OE_QMAKE_PATH_HOST_LIBS = "${libdir}"
 
 do_generate_qt_config_file() {
-    cat > ${QT_CONF_PATH} <<EOF
+    cat > ${OE_QMAKE_QTCONF_PATH} <<EOF
 [Paths]
 Prefix = ${OE_QMAKE_PATH_PREFIX}
 Headers = ${OE_QMAKE_PATH_HEADERS}
@@ -109,17 +109,17 @@ HostBinaries = ${OE_QMAKE_PATH_HOST_BINS}
 HostData = ${OE_QMAKE_PATH_HOST_DATA}
 HostLibraries = ${OE_QMAKE_PATH_HOST_LIBS}
 HostSpec = ${OE_QMAKESPEC}
-TartgetSpec = ${OE_XQMAKESPEC}
+TargetSpec = ${OE_XQMAKESPEC}
 ExternalHostBinaries = ${OE_QMAKE_PATH_EXTERNAL_HOST_BINS}
 Sysroot =
 EOF
 }
 
 do_generate_qt_config_file_append() {
-    cat >> ${QT_CONF_PATH} <<EOF
+    cat >> ${OE_QMAKE_QTCONF_PATH} <<EOF
 
 [EffectivePaths]
-Prefix=..
+Prefix=${B}
 EOF
 }
 
@@ -138,20 +138,12 @@ export OE_QMAKE_AR
 export OE_QMAKE_STRIP
 
 # another exception is that we need to run bin/qmake, because EffectivePaths are relative to qmake location
-OE_QMAKE_QMAKE_ORIG = "${STAGING_BINDIR_NATIVE}${QT_DIR_NAME}/qmake"
-OE_QMAKE_QMAKE = "bin/qmake"
+OE_QMAKE_QMAKE = "${STAGING_BINDIR_NATIVE}${QT_DIR_NAME}/qmake"
 
 do_configure() {
-    # we need symlink in path relative to source, because
-    # EffectivePaths:Prefix is relative to qmake location
-    if [ ! -e ${B}/bin/qmake ]; then
-        mkdir -p ${B}/bin
-        ln -sf ${OE_QMAKE_QMAKE_ORIG} ${B}/bin/qmake
-    fi
-
     ${S}/configure -v \
         -opensource -confirm-license \
-        -sysroot ${STAGING_DIR_NATIVE} \
+        -sysroot ${STAGING_DIR_TARGET} \
         -no-gcc-sysroot \
         -system-zlib \
         -no-libjpeg \
@@ -185,6 +177,7 @@ do_configure() {
         -testsdir ${OE_QMAKE_PATH_TESTS} \
         -hostbindir ${OE_QMAKE_PATH_HOST_BINS} \
         -hostdatadir ${OE_QMAKE_PATH_HOST_DATA} \
+        -host-option CROSS_COMPILE=${HOST_PREFIX} \
         -external-hostbindir ${OE_QMAKE_PATH_EXTERNAL_HOST_BINS} \
         -no-glib \
         -no-iconv \
@@ -195,19 +188,23 @@ do_configure() {
         -no-compile-examples \
         -no-rpath \
         -platform ${OE_QMAKESPEC} \
-        -xplatform linux-oe-g++ \
+        -xplatform ${OE_XQMAKESPEC} \
         ${QT_CONFIG_FLAGS}
 
-    bin/qmake ${OE_QMAKE_DEBUG_OUTPUT} ${S} -o Makefile || die "Configuring qt with qmake failed. EXTRA_OECONF was ${EXTRA_OECONF}"
+    ${OE_QMAKE_QMAKE} ${OE_QMAKE_DEBUG_OUTPUT} ${OE_QMAKE_QTCONF} ${S} -o Makefile || die "Configuring qt with qmake failed. EXTRA_OECONF was ${EXTRA_OECONF}"
 }
 
 # Set the EXTRA_QTLIB variable to e.g. Xml, in order to not remove libQt5Xml.so.*
-EXTRA_QTLIB ?= ""
+EXTRA_QTLIB = "Core"
+
+PRESERVE_PATTERN = "libQt5%s.so*"
+PRESERVE_PATTERN_mingw32 = "libQt5%s.a"
 
 python __anonymous () {
     templibs = ""
+    preservepattern = d.getVar("PRESERVE_PATTERN", True)
     for e in d.getVar("EXTRA_QTLIB", True).split():
-        templibs = "%s -not -name 'libQt5%s.so*' -and" % (templibs, e)
+        templibs = ("%s -not -name '" + preservepattern + "' -and") % (templibs, e)
     d.setVar("QTLIBSPRESERVE", templibs)
 }
 
@@ -216,8 +213,6 @@ do_install() {
     find -name "Makefile*" | xargs sed -i "s,(INSTALL_ROOT)${STAGING_DIR_NATIVE}${STAGING_DIR_NATIVE},(INSTALL_ROOT)${STAGING_DIR_NATIVE},g"
 
     oe_runmake install INSTALL_ROOT=${D}
-
-    install -m 755 ${B}/bin/qmake-target ${D}${OE_QMAKE_PATH_HOST_BINS}/qmake
 
     # for modules which are still using syncqt and call qtPrepareTool(QMAKE_SYNCQT, syncqt)
     # e.g. qt3d, qtwayland
@@ -230,7 +225,6 @@ do_install() {
            ${D}${libdir}/cmake \
            ${D}${libdir}/pkgconfig
     find ${D}${libdir} -maxdepth 1 -name 'lib*' -and -not -type d -and \
-                                   -not -name 'libQt5Core.so*' -and \
                                    ${QTLIBSPRESERVE} \
                                    -not -name 'libQt5Bootstrap.a' \
                                    -exec rm '{}' ';'
@@ -239,6 +233,20 @@ do_install() {
     mkdir -p ${D}${datadir}/cmake/OEToolchainConfig.cmake.d/
     install -m 644 ${WORKDIR}/OEQt5Toolchain.cmake ${D}${datadir}/cmake/OEToolchainConfig.cmake.d/
 }
+
+sysroot_stage_dirs_append() {
+    libtarget=$to${libdir}
+    dllsrc=$from${OE_QMAKE_PATH_BINS}
+    asrc=$from${OE_QMAKE_PATH_LIBS}
+    mkdir -p "$libtarget"
+    {
+        cd $dllsrc
+        find ./Qt*.dll -print0 | cpio --null -pdlu $libtarget
+        cd $asrc
+        find ./libQt*.a -print0 | cpio --null -pdlu $libtarget
+    }
+}
+
 
 fakeroot do_generate_qt_environment_file() {
     mkdir -p ${D}${SDKPATHNATIVE}/environment-setup.d/
@@ -252,7 +260,6 @@ fakeroot do_generate_qt_environment_file() {
     echo 'export OE_QMAKE_CXX=$CXX' >> $script
     echo 'export OE_QMAKE_LINK=$CXX' >> $script
     echo 'export OE_QMAKE_AR=$AR' >> $script
-    echo 'export QT_CONF_PATH=${OE_QMAKE_PATH_HOST_BINS}/qt.conf' >> $script
     echo 'export OE_QMAKE_LIBDIR_QT=`qmake -query QT_INSTALL_LIBS`' >> $script
     echo 'export OE_QMAKE_INCDIR_QT=`qmake -query QT_INSTALL_HEADERS`' >> $script
     echo 'export OE_QMAKE_MOC=${OE_QMAKE_PATH_HOST_BINS}/moc' >> $script
@@ -266,6 +273,45 @@ fakeroot do_generate_qt_environment_file() {
 
     # Use relocable sysroot
     sed -i -e 's:${SDKPATHNATIVE}:$OECORE_NATIVE_SYSROOT:g' $script
+}
+
+fakeroot do_generate_qt_environment_file_mingw32() {
+    mkdir -p ${D}${SDKPATHNATIVE}/environment-setup.d/
+    script=${D}${SDKPATHNATIVE}/environment-setup.d/qt5.bat
+
+    echo '@echo off' > $script
+    echo 'if NOT DEFINED OECORE_NATIVE_SYSROOT set OECORE_NATIVE_SYSROOT=%~dp0..' >> $script
+    echo 'if NOT DEFINED OECORE_TARGET_LIB goto :USAGE' >> $script
+    echo 'if NOT DEFINED OECORE_TARGET_HEADERS goto :USAGE'>> $script
+    echo 'set PATH=${OE_QMAKE_PATH_HOST_BINS};%PATH%' >> $script
+    echo 'set OE_QMAKE_CFLAGS="%CFLAGS%"' >> $script
+    echo 'set OE_QMAKE_CXXFLAGS="%CXXFLAGS%"' >> $script
+    echo 'set OE_QMAKE_LDFLAGS="%LDFLAGS%"' >> $script
+    echo 'set OE_QMAKE_CC=%CC%' >> $script
+    echo 'set OE_QMAKE_CXX=%CXX%' >> $script
+    echo 'set OE_QMAKE_LINK=%CXX%' >> $script
+    echo 'set OE_QMAKE_AR=%AR%' >> $script
+    echo 'set OE_QMAKE_LIBDIR_QT=%OECORE_TARGET_LIB%' >> $script
+    echo 'set OE_QMAKE_INCDIR_QT=%OECORE_TARGET_HEADERS%' >> $script
+    echo 'set OE_QMAKE_MOC=${OE_QMAKE_PATH_HOST_BINS}/moc' >> $script
+    echo 'set OE_QMAKE_UIC=${OE_QMAKE_PATH_HOST_BINS}/uic' >> $script
+    echo 'set OE_QMAKE_RCC=${OE_QMAKE_PATH_HOST_BINS}/rcc' >> $script
+    echo 'set OE_QMAKE_QDBUSCPP2XML=${OE_QMAKE_PATH_HOST_BINS}/qdbuscpp2xml' >> $script
+    echo 'set OE_QMAKE_QDBUSXML2CPP=${OE_QMAKE_PATH_HOST_BINS}/qdbusxml2cpp' >> $script
+    echo 'set OE_QMAKE_QT_CONFIG=%OECORE_TARGET_LIB%${QT_DIR_NAME}/mkspecs/qconfig.pri' >> $script
+    echo 'set OE_QMAKE_PATH_HOST_BINS=${OE_QMAKE_PATH_HOST_BINS}' >> $script
+    echo 'set QMAKESPEC=%OECORE_TARGET_LIB%${QT_DIR_NAME}/mkspecs/win32-g++-oe' >> $script
+    echo 'goto :EOF' >> $script
+    echo '' >> $script
+    echo ':USAGE' >> $script
+    echo 'echo You need to define the lib and header dir of the target sysroot in your environment via:' >> $script
+    echo 'echo Library path: OECORE_TARGET_LIB' >> $script
+    echo 'echo Header path : OECORE_TARGET_HEADERS' >> $script
+
+    # Use relocable sysroot
+    sed -i -e 's:${SDKPATHNATIVE}:%OECORE_NATIVE_SYSROOT%:g' $script
+    # Use Windows style path separators
+    sed -i -e 's:/:\\:g' $script
 }
 
 addtask generate_qt_environment_file after do_install before do_package

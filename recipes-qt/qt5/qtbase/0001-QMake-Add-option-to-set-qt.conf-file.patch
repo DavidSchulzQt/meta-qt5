@@ -1,0 +1,114 @@
+From dbf1c2eb9f4e1feb24a58699b7b550016802e386 Mon Sep 17 00:00:00 2001
+From: David Schulz <david.schulz@theqtcompany.com>
+Date: Mon, 13 Jul 2015 11:21:22 +0200
+Subject: [PATCH] QMake: Add option to set qt.conf file.
+
+Upstream-Status: Integrated in dev (dbf1c2eb9f4e1feb24a58699b7b550016802e386), 
+                 will be in 5.7 branch
+
+Change-Id: Ie5db11892ccf2d357773a4db6a0464bf27be9a26
+Reviewed-by: Oswald Buddenhagen <oswald.buddenhagen@theqtcompany.com>
+---
+ mkspecs/features/configure.prf   | 4 +++-
+ qmake/library/qmakeevaluator.cpp | 2 ++
+ qmake/library/qmakeglobals.cpp   | 7 ++++++-
+ qmake/library/qmakeglobals.h     | 1 +
+ qmake/option.cpp                 | 3 +++
+ 5 files changed, 15 insertions(+), 2 deletions(-)
+
+diff --git a/mkspecs/features/configure.prf b/mkspecs/features/configure.prf
+index 6b37a04..92c288c 100644
+--- a/mkspecs/features/configure.prf
++++ b/mkspecs/features/configure.prf
+@@ -67,7 +67,9 @@ defineTest(qtCompileTest) {
+ 
+     mkpath($$test_out_dir)|error("Aborting.")
+ 
+-    qtRunLoggedCommand("$$test_cmd_base $$system_quote($$system_path($$QMAKE_QMAKE)) -spec $$QMAKESPEC $$qmake_configs $$shell_quote($$test_dir)") {
++    !isEmpty (QMAKE_QTCONF): qtconfarg = -qtconf $$QMAKE_QTCONF
++
++    qtRunLoggedCommand("$$test_cmd_base $$system_quote($$system_path($$QMAKE_QMAKE)) $$qtconfarg -spec $$QMAKESPEC $$qmake_configs $$shell_quote($$test_dir)") {
+         qtRunLoggedCommand("$$test_cmd_base $$QMAKE_MAKE $$(QMAKE_MAKE_ARGS)") {
+             log("yes$$escape_expand(\\n)")
+             msg = "test $$1 succeeded"
+diff --git a/qmake/library/qmakeevaluator.cpp b/qmake/library/qmakeevaluator.cpp
+index cfb95b9..31be44e 100644
+--- a/qmake/library/qmakeevaluator.cpp
++++ b/qmake/library/qmakeevaluator.cpp
+@@ -992,6 +992,8 @@ void QMakeEvaluator::loadDefaults()
+         vars[ProKey("QMAKE_QMAKE")] << ProString(m_option->qmake_abslocation);
+     if (!m_option->qmake_args.isEmpty())
+         vars[ProKey("QMAKE_ARGS")] = ProStringList(m_option->qmake_args);
++    if (!m_option->qtconf.isEmpty())
++        vars[ProKey("QMAKE_QTCONF")] = ProString(m_option->qtconf);
+     vars[ProKey("QMAKE_HOST.cpu_count")] = ProString(QString::number(idealThreadCount()));
+ #if defined(Q_OS_WIN32)
+     vars[ProKey("QMAKE_HOST.os")] << ProString("Windows");
+diff --git a/qmake/library/qmakeglobals.cpp b/qmake/library/qmakeglobals.cpp
+index 55ce404..4f1a9d2 100644
+--- a/qmake/library/qmakeglobals.cpp
++++ b/qmake/library/qmakeglobals.cpp
+@@ -128,7 +128,7 @@ QString QMakeGlobals::cleanSpec(QMakeCmdLineParserState &state, const QString &s
+ QMakeGlobals::ArgumentReturn QMakeGlobals::addCommandLineArguments(
+         QMakeCmdLineParserState &state, QStringList &args, int *pos)
+ {
+-    enum { ArgNone, ArgConfig, ArgSpec, ArgXSpec, ArgTmpl, ArgTmplPfx, ArgCache } argState = ArgNone;
++    enum { ArgNone, ArgConfig, ArgSpec, ArgXSpec, ArgTmpl, ArgTmplPfx, ArgCache, ArgQtConf } argState = ArgNone;
+     for (; *pos < args.count(); (*pos)++) {
+         QString arg = args.at(*pos);
+         switch (argState) {
+@@ -153,6 +153,9 @@ QMakeGlobals::ArgumentReturn QMakeGlobals::addCommandLineArguments(
+         case ArgCache:
+             cachefile = args[*pos] = QDir::cleanPath(QDir(state.pwd).absoluteFilePath(arg));
+             break;
++        case ArgQtConf:
++            qtconf = args[*pos] = QDir::cleanPath(QDir(state.pwd).absoluteFilePath(arg));
++            break;
+         default:
+             if (arg.startsWith(QLatin1Char('-'))) {
+                 if (arg == QLatin1String("-after"))
+@@ -163,6 +166,8 @@ QMakeGlobals::ArgumentReturn QMakeGlobals::addCommandLineArguments(
+                     do_cache = false;
+                 else if (arg == QLatin1String("-cache"))
+                     argState = ArgCache;
++                else if (arg == QLatin1String("-qtconf"))
++                    argState = ArgQtConf;
+                 else if (arg == QLatin1String("-platform") || arg == QLatin1String("-spec"))
+                     argState = ArgSpec;
+                 else if (arg == QLatin1String("-xplatform") || arg == QLatin1String("-xspec"))
+diff --git a/qmake/library/qmakeglobals.h b/qmake/library/qmakeglobals.h
+index de46ebb..87fc9d4 100644
+--- a/qmake/library/qmakeglobals.h
++++ b/qmake/library/qmakeglobals.h
+@@ -112,6 +112,7 @@ public:
+     QString qmake_abslocation;
+     QStringList qmake_args;
+ 
++    QString qtconf;
+     QString qmakespec, xqmakespec;
+     QString user_template, user_template_prefix;
+     QString precmds, postcmds;
+diff --git a/qmake/option.cpp b/qmake/option.cpp
+index da59616..1d1aece 100644
+--- a/qmake/option.cpp
++++ b/qmake/option.cpp
+@@ -172,6 +172,7 @@ bool usage(const char *a0)
+             "  -set <prop> <value> Set persistent property\n"
+             "  -unset <prop>  Unset persistent property\n"
+             "  -query <prop>  Query persistent property. Show all if <prop> is empty.\n"
++            "  -qtconf file   Use file instead of looking for qt.conf\n"
+             "  -cache file    Use file as cache           [makefile mode only]\n"
+             "  -spec spec     Use spec as QMAKESPEC       [makefile mode only]\n"
+             "  -nocache       Don't use a cache file      [makefile mode only]\n"
+@@ -642,6 +643,8 @@ qmakeAddCacheClear(qmakeCacheClearFunc func, void **data)
+ 
+ QString qmake_libraryInfoFile()
+ {
++    if (!Option::globals->qtconf.isEmpty())
++        return Option::globals->qtconf;
+     if (!Option::globals->qmake_abslocation.isEmpty())
+         return QDir(QFileInfo(Option::globals->qmake_abslocation).absolutePath()).filePath("qt.conf");
+     return QString();
+-- 
+2.5.0.windows.1
+
