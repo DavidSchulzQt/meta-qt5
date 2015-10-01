@@ -23,8 +23,6 @@ FILESEXTRAPATHS =. "${FILE_DIRNAME}/qtbase:"
 # common for qtbase-native, qtbase-nativesdk and qtbase
 SRC_URI += "\
     file://0001-Add-linux-oe-g-platform.patch \
-    file://0002-qlibraryinfo-allow-to-set-qt.conf-from-the-outside-u.patch \
-    file://0003-Add-external-hostbindir-option.patch \
     file://0004-qt_module-Fix-pkgconfig-and-libtool-replacements.patch \
     file://0005-qeglplatformintegration-Undefine-CursorShape-from-X..patch \
     file://0006-configure-bump-path-length-from-256-to-512-character.patch \
@@ -34,12 +32,13 @@ SRC_URI += "\
 # common for qtbase-native and nativesdk-qtbase
 SRC_URI += " \
     file://0008-Always-build-uic.patch \
-    file://0009-Add-external-hostbindir-option-for-native-sdk.patch \
+    file://0001-Add-win32-oe-g-mkspec-that-uses-the-OE_-environment.patch \
+    file://0001-QMake-Add-option-to-set-qt.conf-file.patch \
+    file://0002-configure-Separate-host-and-build-platform.patch \
 "
 
 # specific for nativesdk-qtbase
 SRC_URI += " \
-    file://0010-configure-preserve-built-qmake-and-swap-with-native-.patch \
 "
 
 # CMake's toolchain configuration of nativesdk-qtbase
@@ -93,7 +92,7 @@ OE_QMAKE_PATH_HOST_DATA = "${libdir}${QT_DIR_NAME}"
 OE_QMAKE_PATH_HOST_LIBS = "${libdir}"
 
 do_generate_qt_config_file() {
-    cat > ${QT_CONF_PATH} <<EOF
+    cat > ${OE_QMAKE_QTCONF_PATH} <<EOF
 [Paths]
 Prefix = ${OE_QMAKE_PATH_PREFIX}
 Headers = ${OE_QMAKE_PATH_HEADERS}
@@ -114,17 +113,17 @@ HostBinaries = ${OE_QMAKE_PATH_HOST_BINS}
 HostData = ${OE_QMAKE_PATH_HOST_DATA}
 HostLibraries = ${OE_QMAKE_PATH_HOST_LIBS}
 HostSpec = ${OE_QMAKESPEC}
-TartgetSpec = ${OE_XQMAKESPEC}
+TargetSpec = ${OE_XQMAKESPEC}
 ExternalHostBinaries = ${OE_QMAKE_PATH_EXTERNAL_HOST_BINS}
 Sysroot =
 EOF
 }
 
 do_generate_qt_config_file_append() {
-    cat >> ${QT_CONF_PATH} <<EOF
+    cat >> ${OE_QMAKE_QTCONF_PATH} <<EOF
 
 [EffectivePaths]
-Prefix=..
+Prefix=${B}
 EOF
 }
 
@@ -147,17 +146,9 @@ OE_QMAKE_QMAKE_ORIG = "${STAGING_BINDIR_NATIVE}${QT_DIR_NAME}/qmake"
 OE_QMAKE_QMAKE = "bin/qmake"
 
 do_configure() {
-    # we need symlink in path relative to source, because
-    # EffectivePaths:Prefix is relative to qmake location
-    # Also, configure expects qmake-native to swap with real one
-    if [ ! -e ${B}/bin/qmake-native ]; then
-        mkdir ${B}/bin
-        ln -sf ${OE_QMAKE_QMAKE_ORIG} ${B}/bin/qmake-native
-    fi
-
     ${S}/configure -v \
         -opensource -confirm-license \
-        -sysroot ${STAGING_DIR_NATIVE} \
+        -sysroot ${STAGING_DIR_TARGET} \
         -no-gcc-sysroot \
         -system-zlib \
         -no-libjpeg \
@@ -191,6 +182,7 @@ do_configure() {
         -testsdir ${OE_QMAKE_PATH_TESTS} \
         -hostbindir ${OE_QMAKE_PATH_HOST_BINS} \
         -hostdatadir ${OE_QMAKE_PATH_HOST_DATA} \
+        -host-option CROSS_COMPILE=${HOST_PREFIX} \
         -external-hostbindir ${OE_QMAKE_PATH_EXTERNAL_HOST_BINS} \
         -no-glib \
         -no-iconv \
@@ -201,10 +193,10 @@ do_configure() {
         -no-compile-examples \
         -no-rpath \
         -platform ${OE_QMAKESPEC} \
-        -xplatform linux-oe-g++ \
+        -xplatform ${OE_XQMAKESPEC} \
         ${QT_CONFIG_FLAGS}
 
-    bin/qmake ${OE_QMAKE_DEBUG_OUTPUT} ${S} -o Makefile || die "Configuring qt with qmake failed. EXTRA_OECONF was ${EXTRA_OECONF}"
+    ${OE_QMAKE_QMAKE_ORIG} ${OE_QMAKE_DEBUG_OUTPUT} ${OE_QMAKE_QTCONF} ${S} -o Makefile || die "Configuring qt with qmake failed. EXTRA_OECONF was ${EXTRA_OECONF}"
 }
 
 # Set the EXTRA_QTLIB variable to e.g. Xml, in order to not remove libQt5Xml.so.*
@@ -223,13 +215,9 @@ do_install() {
 
     oe_runmake install INSTALL_ROOT=${D}
 
-    # replace the native qmake installed above with nativesdk version
-    rm -rf ${D}${OE_QMAKE_PATH_HOST_BINS}/qmake
-    install -m 755 ${B}/bin/qmake-real ${D}${OE_QMAKE_PATH_HOST_BINS}/qmake
-
     # for modules which are still using syncqt and call qtPrepareTool(QMAKE_SYNCQT, syncqt)
     # e.g. qt3d, qtwayland
-    ln -sf syncqt.pl ${D}${OE_QMAKE_PATH_QT_BINS}/syncqt
+    #ln -sf syncqt.pl ${D}${OE_QMAKE_PATH_QT_BINS}/syncqt*
 
     # remove things unused in nativesdk, we need the headers, Qt5Core
     # and Qt5Bootstrap.
@@ -247,6 +235,17 @@ do_install() {
     mkdir -p ${D}${datadir}/cmake/OEToolchainConfig.cmake.d/
     install -m 644 ${WORKDIR}/OEQt5Toolchain.cmake ${D}${datadir}/cmake/OEToolchainConfig.cmake.d/
 }
+
+sysroot_stage_dirs_append() {
+    libtarget=$to${libdir}
+    dllsrc=$from${OE_QMAKE_PATH_BINS}
+    mkdir -p "$libtarget"
+    {
+        cd $dllsrc
+        find ./Qt*.dll -print0 | cpio --null -pdlu $libtarget
+    }
+}
+
 
 fakeroot do_generate_qt_environment_file() {
     mkdir -p ${D}${SDKPATHNATIVE}/environment-setup.d/

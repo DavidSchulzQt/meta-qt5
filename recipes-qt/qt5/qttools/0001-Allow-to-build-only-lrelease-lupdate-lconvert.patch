@@ -79,7 +79,7 @@ index 3a70580..a977878 100644
  qtNomakeTools( \
      linguist \
 diff --git a/src/src.pro b/src/src.pro
-index 494898f..c02848d 100644
+index 494898f..c497069 100644
 --- a/src/src.pro
 +++ b/src/src.pro
 @@ -4,10 +4,12 @@ qtHaveModule(widgets) {
@@ -114,9 +114,11 @@ index 494898f..c02848d 100644
 -qtHaveModule(dbus): SUBDIRS += qdbus
 +!linguistonly:qtHaveModule(dbus): SUBDIRS += qdbus
  
- win32|winrt:SUBDIRS += windeployqt
- winrt:SUBDIRS += winrtrunner
+-win32|winrt:SUBDIRS += windeployqt
+-winrt:SUBDIRS += winrtrunner
 -qtHaveModule(gui):!android:!ios:!qnx:!wince*:!winrt*:SUBDIRS += qtdiag
++!linguistonly:win32|winrt:SUBDIRS += windeployqt
++!linguistonly:winrt:SUBDIRS += winrtrunner
 +!linguistonly:qtHaveModule(gui):!android:!ios:!qnx:!wince*:!winrt*:SUBDIRS += qtdiag
  
  qtNomakeTools( \

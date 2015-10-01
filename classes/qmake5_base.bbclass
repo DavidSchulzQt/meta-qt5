@@ -1,6 +1,8 @@
 # hardcode linux, because that's what 0001-Add-linux-oe-g-platform.patch adds
 OE_QMAKE_PLATFORM_NATIVE = "linux-oe-g++"
 OE_QMAKE_PLATFORM = "linux-oe-g++"
+OE_QMAKE_PLATFORM_NATIVE_mingw32 = "win32-g++-oe"
+OE_QMAKE_PLATFORM_mingw32 = "win32-g++-oe"
 
 # Add -d to show debug output from every qmake call, but it prints *a lot*, better to add it only to debugged recipe
 OE_QMAKE_DEBUG_OUTPUT ?= ""
@@ -43,14 +45,18 @@ OE_QMAKE_LDFLAGS = "${LDFLAGS}"
 OE_QMAKE_AR = "${AR}"
 OE_QMAKE_STRIP = "echo"
 OE_QMAKE_WAYLAND_SCANNER = "${STAGING_BINDIR_NATIVE}/wayland-scanner"
-
-# this one needs to be exported, because qmake reads it from shell env
-export QT_CONF_PATH = "${WORKDIR}/qt.conf"
+OE_QMAKE_QTCONF_PATH = "${WORKDIR}/qt.conf"
+OE_QMAKE_QTCONF = " -qtconf ${OE_QMAKE_QTCONF_PATH}"
 
 inherit qmake5_paths
 
 do_generate_qt_config_file() {
-    cat > ${QT_CONF_PATH} <<EOF
+    generate_qt_config_file_paths
+    generate_qt_config_file_effective_paths
+}
+
+generate_qt_config_file_paths() {
+    cat > ${OE_QMAKE_QTCONF_PATH} <<EOF
 [Paths]
 Prefix = ${OE_QMAKE_PATH_PREFIX}
 Headers = ${OE_QMAKE_PATH_HEADERS}
@@ -67,13 +73,21 @@ Documentation = ${OE_QMAKE_PATH_DOCS}
 Settings = ${OE_QMAKE_PATH_SETTINGS}
 Examples = ${OE_QMAKE_PATH_EXAMPLES}
 Tests = ${OE_QMAKE_PATH_TESTS}
-HostBinaries = ${OE_QMAKE_PATH_HOST_BINS}
+HostBinaries = ${OE_QMAKE_PATH_EXTERNAL_HOST_BINS}
 HostData = ${OE_QMAKE_PATH_HOST_DATA}
 HostLibraries = ${OE_QMAKE_PATH_HOST_LIBS}
 HostSpec = ${OE_QMAKESPEC}
-TartgetSpec = ${OE_XQMAKESPEC} 
+TargetSpec = ${OE_XQMAKESPEC}
 ExternalHostBinaries = ${OE_QMAKE_PATH_EXTERNAL_HOST_BINS}
 Sysroot = ${STAGING_DIR_TARGET}
+EOF
+}
+
+generate_qt_config_file_effective_paths() {
+    cat >> ${OE_QMAKE_QTCONF_PATH} <<EOF
+[EffectivePaths]
+HostBinaries = ${OE_QMAKE_PATH_EXTERNAL_HOST_BINS}
+HostData = ${OE_QMAKE_PATH_HOST_DATA}
 EOF
 }
 #
@@ -154,8 +168,8 @@ qmake5_base_do_configure () {
     # for config.tests to read this
     export QMAKE_MAKE_ARGS="${EXTRA_OEMAKE}"
 
-    CMD="${OE_QMAKE_QMAKE} -makefile -o Makefile ${OE_QMAKE_DEBUG_OUTPUT} ${OE_QMAKE_RECURSIVE} $QMAKE_VARSUBST_PRE $AFTER $PROFILES $QMAKE_VARSUBST_POST"
-    ${OE_QMAKE_QMAKE} -makefile -o Makefile ${OE_QMAKE_DEBUG_OUTPUT} ${OE_QMAKE_RECURSIVE} $QMAKE_VARSUBST_PRE $AFTER $PROFILES $QMAKE_VARSUBST_POST || die "Error calling $CMD"
+    CMD="${OE_QMAKE_QMAKE} -makefile -o Makefile ${OE_QMAKE_QTCONF} ${OE_QMAKE_DEBUG_OUTPUT} ${OE_QMAKE_RECURSIVE} $QMAKE_VARSUBST_PRE $AFTER $PROFILES $QMAKE_VARSUBST_POST"
+    ${OE_QMAKE_QMAKE} -makefile -o Makefile ${OE_QMAKE_QTCONF} ${OE_QMAKE_DEBUG_OUTPUT} ${OE_QMAKE_RECURSIVE} $QMAKE_VARSUBST_PRE $AFTER $PROFILES $QMAKE_VARSUBST_POST || die "Error calling $CMD"
 }
 
 qmake5_base_native_do_install() {
